@@ -370,7 +370,7 @@ impl Page<'_> {
 <div class="layout{class}">{sidebar}<main id="content" tabindex="-1">{content}</main></div>
 <footer class="site-footer"{english}>
 <p>OrenjiNeko · Word-chain games, counting games, and AI chat.</p>
-<p>Contact hakolilim through the <a href="https://discord.gg/NC7Ks2c5wE">Support Discord Server</a> · <a href="https://github.com/hakolilim/Phobophake">GitHub</a></p>
+<p>Contact hakolilim through the <a href="https://discord.gg/NC7Ks2c5wE">Support Discord Server</a> · <a href="https://github.com/hakolilim/orenjineko">GitHub</a></p>
 </footer>
 </body>
 </html>"##,

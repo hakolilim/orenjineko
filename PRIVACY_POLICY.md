@@ -6,7 +6,7 @@ Last updated: November 21, 2026.
 
 OrenjiNeko is a Discord bot that provides Vietnamese word-chain games, counting games, and AI chat. This policy explains how data is processed when you use the bot and its accompanying web pages.
 
-The bot is maintained by hakolilim. For questions, incident reports, or requests concerning your data, please contact the maintainer directly through the [Support Discord Server](https://discord.gg/NC7Ks2c5wE). The source code is available on [GitHub Phobophake](https://github.com/hakolilim/Phobophake).
+The bot is maintained by hakolilim. For questions, incident reports, or requests concerning your data, please contact the maintainer directly through the [Support Discord Server](https://discord.gg/NC7Ks2c5wE). The source code is available on [GitHub OrenjiNeko](https://github.com/hakolilim/orenjineko).
 
 ## Data the Bot Processes
 

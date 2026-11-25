@@ -48,7 +48,7 @@ To the extent permitted by applicable law, the maintainer is not liable for indi
 
 ## Source Code
 
-OrenjiNeko's source code is available on [GitHub Phobophake](https://github.com/hakolilim/Phobophake). Copying, modifying, and distributing the source code are governed by the license in the repository; these service terms do not replace that license. People who deploy their own instances are responsible for those deployments and their data policies.
+OrenjiNeko's source code is available on [GitHub OrenjiNeko](https://github.com/hakolilim/orenjineko). Copying, modifying, and distributing the source code are governed by the license in the repository; these service terms do not replace that license. People who deploy their own instances are responsible for those deployments and their data policies.
 
 ## Changes and Contact
 

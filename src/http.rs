@@ -33,7 +33,6 @@ const WRITEDATA: c_int = 10001;
 const URL: c_int = 10002;
 const WRITEFUNCTION: c_int = 20011;
 const POSTFIELDS: c_int = 10015;
-const USERAGENT: c_int = 10018;
 const HTTPHEADER: c_int = 10023;
 const CUSTOMREQUEST: c_int = 10036;
 const FOLLOWLOCATION: c_int = 52;
@@ -198,10 +197,6 @@ impl Request<'_> {
         easy.string(URL, self.url)?;
         easy.long(PROTOCOLS, HTTP_PROTOCOLS)?;
         easy.string(CUSTOMREQUEST, self.method)?;
-        easy.string(
-            USERAGENT,
-            "DiscordBot (https://github.com/hakolilim/Phobophake, 1.0.0)",
-        )?;
         easy.long(NOSIGNAL, 1)?;
         let timeout = self.timeout.as_millis().clamp(1, c_long::MAX as u128) as c_long;
         easy.long(TIMEOUT_MS, timeout)?;

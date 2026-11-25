@@ -191,7 +191,14 @@ impl Discord {
     ) -> Result<Json, String> {
         // Webhook/callback URLs contain their own credential.
         let auth = !path.starts_with("/interactions/") && !path.starts_with("/webhooks/");
-        let mut headers = Vec::new();
+        let mut headers = vec![
+            concat!(
+                "User-Agent: DiscordBot (https://github.com/hakolilim/orenjineko, ",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            )
+            .into(),
+        ];
         if auth {
             headers.push(format!("Authorization: Bot {}", self.token));
         }

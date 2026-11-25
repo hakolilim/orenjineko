@@ -218,4 +218,4 @@ Các bài kiểm thử chạy với dữ liệu nội bộ và không cần tài
 - Từ điển chính: [undertheseanlp/dictionary](https://github.com/undertheseanlp/dictionary), lọc cụm 2 tiếng phù hợp với trò chơi.
 - Từ đóng góp được dùng khi seed: [lvdat/phobo-contribute-words](https://github.com/lvdat/phobo-contribute-words).
 
-Các nguồn seed thực tế được cấu hình trong [`src/store.rs`](src/store.rs). Repository hiện tại của OrenjiNeko là [hakolilim/Phobophake](https://github.com/hakolilim/Phobophake).
+Các nguồn seed thực tế được cấu hình trong [`src/store.rs`](src/store.rs). Repository hiện tại của OrenjiNeko là [hakolilim/orenjineko](https://github.com/hakolilim/orenjineko).

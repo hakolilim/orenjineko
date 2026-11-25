@@ -522,7 +522,7 @@ fn help() -> Json {
         ),
         field(
             "Hỗ trợ và mã nguồn",
-            "[Discord hỗ trợ](https://discord.gg/NC7Ks2c5wE) · [Mã nguồn OrenjiNeko](https://github.com/hakolilim/Phobophake)",
+            "[Discord hỗ trợ](https://discord.gg/NC7Ks2c5wE) · [Mã nguồn OrenjiNeko](https://github.com/hakolilim/orenjineko)",
             false,
         ),
         field(
@@ -1082,6 +1082,12 @@ mod broadcast_tests {
         });
         let writes = &requests[requests.len() - 5..];
         assert_eq!(writes[0].body["data"]["flags"].int(), i64::from(EPHEMERAL));
+        assert!(writes[0].headers.iter().any(|header| header
+            == concat!(
+                "User-Agent: DiscordBot (https://github.com/hakolilim/orenjineko, ",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            )));
         assert!(
             writes[0]
                 .headers

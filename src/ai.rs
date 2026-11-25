@@ -601,13 +601,20 @@ mod provider_tests {
             assert!(matches!(rx.try_recv(), Ok(Update::Text(text)) if text == "Xin chào"));
         });
         let request = &requests[0];
-        assert!(request.body["stream"].bool());
-        assert_eq!(request.body["messages"][0]["role"].str(), "user");
-        assert!(
-            request
-                .headers
-                .iter()
-                .any(|header| header == "Authorization: Bearer test-key")
+        assert_eq!(
+            request.headers,
+            [
+                "Content-Type: application/json",
+                "Accept: text/event-stream",
+                "Authorization: Bearer test-key",
+            ],
+        );
+        assert_eq!(
+            request.body,
+            json!({
+                "model": "test", "max_tokens": 2048, "stream": true,
+                "messages": [{"role": "user", "content": "Chào"}]
+            }),
         );
     }
 }
