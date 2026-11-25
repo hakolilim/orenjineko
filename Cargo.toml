@@ -1,0 +1,11 @@
+[package]
+name = "orenjineko"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Bot Discord tiếng Việt cho trò chơi nối từ và đếm số"
+license = "ISC"
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,64 @@
+    .status-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .status-identity { display: flex; align-items: center; gap: .875rem; min-width: 0; }
+    .status-avatar {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 3.5rem;
+      height: 3.5rem;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      background: var(--bg);
+      object-fit: cover;
+      font-size: 1.5rem;
+    }
+    .status-name, .status-description { margin: 0; line-height: 1.5; }
+    .status-name { font-weight: 700; }
+    .status-description { color: var(--muted); font-size: .9375rem; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      padding: .25rem .875rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      color: #86efac;
+      font-size: .875rem;
+      font-weight: 650;
+    }
+    .status-badge.is-booting { color: #fcd34d; }
+    .status-badge::before { content: ""; flex: 0 0 .5rem; height: .5rem; border-radius: 50%; background: currentColor; }
+    .status-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: .75rem;
+      margin: 1.5rem 0 0;
+    }
+    .status-metric {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: .75rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--bg);
+    }
+    .status-metric dt { color: var(--muted); font-size: .9375rem; line-height: 1.4; }
+    .status-metric dd { margin: .375rem 0 0; font-size: 1.375rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3; }
+    .status-meta { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin: 1.25rem 0 0; color: var(--muted); font-size: .8125rem; }
+    @media (max-width: 960px) {
+      .status-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 480px) {
+      .status-metric { padding: .75rem; }
+      .status-metric dd { font-size: clamp(1rem, 4.6vw, 1.375rem); }
+    }

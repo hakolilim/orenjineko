@@ -1,0 +1,6 @@
+    article > p:first-of-type { color: var(--muted); font-size: .9375rem; }
+    article h2 { margin: 2.5rem 0 1rem; font-size: 1.35rem; line-height: 1.4; }
+    article p { margin: 1rem 0; }
+    article ul { padding-left: 1.4rem; }
+    article li { margin: .8rem 0; }
+    code { padding: .1rem .35rem; border-radius: 4px; background: var(--bg); color: #fdba74; font-size: .9375em; }
