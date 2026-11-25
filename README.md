@@ -19,7 +19,7 @@ Người duy trì: **hakolilim**. Để được hỗ trợ, báo lỗi hoặc y
 
 ### Yêu cầu
 
-- **Rust và Cargo 1.88+** trên Linux, cùng libcurl 4, OpenSSL 3, Cairo 2, font DejaVu Sans và bộ chứng chỉ CA.
+- Linux với libcurl 4, OpenSSL 3, Cairo, font DejaVu Sans và bộ chứng chỉ CA. Cần **Rust và Cargo 1.88+** khi tự build từ mã nguồn.
 - Một ứng dụng bot Discord và bot token.
 - Một project Supabase với URL và khoá `service_role`.
 - Kết nối tới Discord, Supabase và GitHub khi khởi tạo từ điển lần đầu; thêm kết nối tới nhà cung cấp AI nếu bật `/ai`.
@@ -29,6 +29,47 @@ Người duy trì: **hakolilim**. Để được hỗ trợ, báo lỗi hoặc y
 Tạo ứng dụng bot của riêng bạn trong [Discord Developer Portal](https://discord.com/developers/applications), lấy bot token và bật **Message Content Intent**. Mã nguồn sử dụng các intent `Guilds`, `GuildMessages` và `MessageContent`.
 
 Mời bot vào máy chủ với các scope `bot` và `applications.commands`. Cấp quyền **View Channel**, **Send Messages**, **Embed Links** và **Add Reactions**. Dùng thêm **Read Message History** cho đếm số và ngữ cảnh AI, cùng **Attach Files** cho ảnh công thức trong câu trả lời AI. Bot cần truy cập được kênh trò chơi và kênh báo cáo nếu sử dụng tính năng duyệt từ.
+
+### Deploy từ GitHub Release
+
+Gói [Linux x86_64](https://github.com/hakolilim/orenjineko/releases/latest) chạy trên Debian 12 x86_64. Gói gồm binary `orenjineko`, mẫu `.env.example` và `supabase/schema.sql`.
+
+Trên VPS Debian 12, cài thư viện, tải gói bằng tài khoản quản lý PM2 và kiểm tra SHA-256 trước khi giải nén.
+
+```bash
+sudo apt update
+sudo apt install -y libcurl4 libssl3 libcairo2 fonts-dejavu-core ca-certificates curl
+
+install -d -m 700 "$HOME/orenjineko"
+cd "$HOME/orenjineko"
+release_url=https://github.com/hakolilim/orenjineko/releases/latest/download
+curl -fLO "$release_url/orenjineko-linux-x86_64.tar.gz" &&
+  curl -fLO "$release_url/orenjineko-linux-x86_64.tar.gz.sha256" &&
+  sha256sum -c orenjineko-linux-x86_64.tar.gz.sha256 &&
+  tar -xzf orenjineko-linux-x86_64.tar.gz
+```
+
+Tạo cấu hình riêng trên VPS hoặc dùng `.env` hiện có.
+
+```bash
+test -f .env || install -m 600 .env.example .env
+chmod 600 .env
+```
+
+Điền `BOT_TOKEN`, `SUPABASE_URL` và `SUPABASE_KEY` theo mục [Biến môi trường](#biến-môi-trường). Với project Supabase mới, chạy `supabase/schema.sql` trong SQL Editor. Dừng instance bot cũ trước khi khởi động bản release dùng cùng database.
+
+Khởi động lần đầu bằng PM2. Thư mục làm việc trỏ đến nơi chứa `.env`.
+
+```bash
+pm2 start "$PWD/orenjineko" --name orenjineko \
+  --interpreter none --cwd "$PWD" --kill-timeout 60000
+pm2 logs orenjineko --lines 50 --nostream
+curl -fsS http://127.0.0.1:3000/api/status
+```
+
+Dùng cổng `PORT` trong `.env` nếu đã đổi cổng mặc định. Khi API trả `"ready": true`, chạy `pm2 save`. Nếu PM2 chưa tự chạy khi VPS khởi động, dùng `pm2 startup`, chạy lệnh PM2 in ra rồi chạy `pm2 save`. [Hướng dẫn PM2 Startup](https://pm2.keymetrics.io/docs/usage/startup/)
+
+Để cập nhật bản đã chạy bằng PM2, dừng tiến trình bằng `pm2 stop orenjineko`, tải và giải nén gói mới trong cùng thư mục, rồi chạy `pm2 restart orenjineko`. File `.env` được giữ trong thư mục cài đặt qua các lần cập nhật.
 
 ### Cài mã nguồn và cơ sở dữ liệu
 
@@ -170,7 +211,7 @@ Bản build nhúng hai tài liệu [`PRIVACY_POLICY.md`](PRIVACY_POLICY.md) và 
 
 ## Triển khai và failover
 
-Build trên máy Linux hoặc trong môi trường có cùng ABI với máy chạy. Triển khai binary `target/release/orenjineko` cùng các thư viện hệ thống được liệt kê ở trên. Cấu hình biến môi trường và chuyển tiếp HTTP tới cổng `PORT`. Dùng `/health` để kiểm tra HTTP, và `/api/status` để kiểm tra trạng thái kết nối Discord.
+Dùng [bản phát hành Linux cho VPS Debian 12](#deploy-từ-github-release) hoặc tự build trên môi trường có cùng ABI với máy chạy. Dùng `/health` để kiểm tra HTTP và `/api/status` để kiểm tra trạng thái kết nối Discord.
 
 Chỉ chạy **một instance hoạt động tại một thời điểm**. Mỗi instance giữ cache RAM riêng và không nhận cập nhật trực tiếp từ instance khác. Khi chuyển VPS, dừng instance cũ trước rồi khởi động instance mới; bot mới nạp lại state từ cùng Supabase. Việc sao lưu và khôi phục dữ liệu thực hiện trên cơ sở dữ liệu; không dựa vào thư mục `data/` cũ.
 
