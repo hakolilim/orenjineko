@@ -17,12 +17,13 @@ struct Database {
 
 impl Database {
     fn new(base: &str, key: &str) -> Self {
+        let mut headers = vec![format!("apikey: {key}")];
+        if !key.starts_with("sb_secret_") && !key.starts_with("sb_publishable_") {
+            headers.push(format!("Authorization: Bearer {key}"));
+        }
         Self {
             base: format!("{base}/rest/v1"),
-            headers: vec![
-                format!("apikey: {key}"),
-                format!("Authorization: Bearer {key}"),
-            ],
+            headers,
         }
     }
 
@@ -50,11 +51,33 @@ impl Database {
         .send()
         .map_err(|error| format!("Supabase {method} {table}: {error}"))?;
         if !response.success() {
-            let message = response.json().unwrap_or_default();
+            let error = response.json().unwrap_or_default();
+            let message = error["message"].str();
+            let help = if error["code"].str() == "42501"
+                || (response.code == 403 && message.starts_with("permission denied for table "))
+            {
+                let role = error["hint"]
+                    .str()
+                    .split_whitespace()
+                    .last()
+                    .map(|role| role.trim_matches([';', '"']));
+                match role {
+                    Some("anon" | "authenticated") => {
+                        " Dùng Secret key (sb_secret_…) hoặc khóa service_role của cùng project cho SUPABASE_KEY."
+                    }
+                    Some("service_role") => {
+                        " Chạy phần GRANT cuối supabase/schema.sql trong Supabase SQL Editor của project."
+                    }
+                    _ => {
+                        " Kiểm tra SUPABASE_KEY là Secret key hoặc khóa service_role của cùng project, rồi kiểm tra phần GRANT cuối supabase/schema.sql."
+                    }
+                }
+            } else {
+                ""
+            };
             return Err(format!(
-                "Supabase {method} {table}: HTTP {} {}",
-                response.code,
-                message["message"].str()
+                "Supabase {method} {table}: HTTP {} {message}{help}",
+                response.code
             ));
         }
         response.json()
@@ -734,6 +757,57 @@ mod tests {
 mod persistence_tests {
     use super::*;
     use crate::test_support::{Reply, database, dictionary, mock, store};
+
+    #[test]
+    fn sends_supabase_secret_keys_in_apikey_and_legacy_keys_in_both_headers() {
+        let path = "/rest/v1/words";
+        let (_, requests) = mock(
+            vec![
+                Reply::json("GET", path, 200, json!([])),
+                Reply::json("GET", path, 200, json!([])),
+            ],
+            || {
+                Database::new("http://localhost", "sb_secret_test")
+                    .request("GET", "words", "", None)
+                    .unwrap();
+                Database::new("http://localhost", "legacy-jwt")
+                    .request("GET", "words", "", None)
+                    .unwrap();
+            },
+        );
+        assert_eq!(requests[0].headers, ["apikey: sb_secret_test"]);
+        assert_eq!(
+            requests[1].headers,
+            ["apikey: legacy-jwt", "Authorization: Bearer legacy-jwt"]
+        );
+    }
+
+    #[test]
+    fn permission_error_distinguishes_missing_grants_from_wrong_key() {
+        for (role, expected) in [
+            ("service_role", "phần GRANT cuối supabase/schema.sql"),
+            ("anon", "cùng project cho SUPABASE_KEY"),
+        ] {
+            let reply = Reply::json(
+                "GET",
+                "/rest/v1/words",
+                403,
+                json!({
+                    "message": "permission denied for table words",
+                    "code": "42501",
+                    "hint": (format!("Grant the required privileges to the current role with: GRANT SELECT ON public.words TO {role};"))
+                }),
+            );
+            let (error, _) = mock(vec![reply], || {
+                Database::new("http://localhost", "test-key")
+                    .request("GET", "words", "", None)
+                    .unwrap_err()
+            });
+            assert!(error.contains("HTTP 403 permission denied for table words"));
+            assert!(error.contains(expected));
+            assert!(!error.contains("test-key"));
+        }
+    }
 
     #[test]
     fn counting_write_failure_keeps_previous_turn_and_retry_updates_it() {

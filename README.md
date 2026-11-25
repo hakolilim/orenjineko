@@ -53,6 +53,8 @@ cargo build --release --locked --offline
 
 Bot nạp dữ liệu từ Supabase, mở web server rồi kết nối Discord và đồng bộ slash command. API trạng thái hiển thị `booting` cho đến khi Gateway sẵn sàng. Nếu bảng `words` rỗng, bot tải và seed từ điển từ GitHub. Các lần sau bot nạp từ Supabase.
 
+Nếu Data API trả `permission denied for table words`, kiểm tra `SUPABASE_URL` và `SUPABASE_KEY` thuộc cùng project. Lấy **Secret key** (`sb_secret_…`) hoặc khóa **`service_role`** cũ trong **Settings → API Keys**. Biến được export trong shell có ưu tiên cao hơn `.env`. Nếu khóa đúng và lỗi vẫn còn, chạy các lệnh `GRANT` cuối [schema.sql](supabase/schema.sql) trong Supabase SQL Editor. Các lệnh cấp quyền cho vai trò `service_role` trên các bảng bot dùng. [Tài liệu Supabase về quyền Data API](https://supabase.com/kb/troubleshooting/database-api-42501-errors)
+
 ## Biến môi trường
 
 Tham khảo [`.env.example`](.env.example). Không cần cấu hình AI để sử dụng các trò chơi.
@@ -61,7 +63,7 @@ Tham khảo [`.env.example`](.env.example). Không cần cấu hình AI để s�
 | --- | --- |
 | `BOT_TOKEN` | Token bot Discord, bắt buộc. |
 | `SUPABASE_URL` | URL project Supabase, bắt buộc. |
-| `SUPABASE_KEY` | Khoá `service_role` của Supabase, bắt buộc. |
+| `SUPABASE_KEY` | Secret key (`sb_secret_…`) hoặc khóa `service_role` của Supabase, bắt buộc. |
 | `REPORT_CHANNEL` | ID kênh duyệt từ và công cụ vận hành; tuỳ chọn. |
 | `CORRECT_EMOJI` | Emoji phản hồi lượt đúng; mặc định `✅`. |
 | `WRONG_EMOJI` | Emoji phản hồi lượt sai; mặc định `❌`. |

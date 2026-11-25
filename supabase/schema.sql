@@ -1,6 +1,6 @@
 -- Schema cho bot nối từ PhoBo (Supabase / Postgres)
 -- Chạy 1 lần trong Supabase SQL Editor.
--- Dùng SUPABASE_KEY = service_role ở server-side nên không cần RLS policies.
+-- SUPABASE_KEY dùng Secret key hoặc khóa service_role cho tiến trình bot.
 
 create table if not exists words (
     word text primary key
@@ -75,3 +75,17 @@ on conflict (key) do nothing;
 create table if not exists premium_guilds (
     guild_id text primary key
 );
+
+-- Quyền Data API cho bot. Với database đã có bảng, có thể chạy riêng phần này.
+grant usage on schema public to service_role;
+
+grant select, insert, update on table
+    public.words, public.global_stats
+to service_role;
+
+grant select, insert, update, delete on table
+    public.report_words, public.guild_config, public.game_state,
+    public.counting_channels, public.rankings
+to service_role;
+
+grant select, delete on table public.premium_guilds to service_role;
