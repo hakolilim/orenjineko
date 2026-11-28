@@ -1,6 +1,8 @@
 -- Schema cho bot nối từ PhoBo (Supabase / Postgres)
 -- Chạy 1 lần trong Supabase SQL Editor.
 -- SUPABASE_KEY dùng Secret key hoặc khóa service_role cho tiến trình bot.
+-- Database đã có sẵn: chạy khối increment_stat ở cuối file TRƯỚC khi chạy bản bot mới
+-- (bot dùng hàm này để cộng dồn bộ đếm global_stats nguyên tử khi có nhiều shard).
 
 create table if not exists words (
     word text primary key
@@ -89,3 +91,29 @@ grant select, insert, update, delete on table
 to service_role;
 
 grant select, delete on table public.premium_guilds to service_role;
+
+-- Cộng dồn nguyên tử bộ đếm global_stats và trả về giá trị mới. Bot gọi qua RPC
+-- (POST /rest/v1/rpc/increment_stat) để nhiều tiến trình/shard không ghi đè số của nhau.
+-- Chạy độc lập được trên database cũ. Chỉ service_role được gọi.
+create or replace function public.increment_stat(stat_key text, delta bigint)
+returns bigint
+language plpgsql
+set search_path = public
+as $$
+declare
+    result bigint;
+begin
+    if delta < 0 then
+        raise exception 'delta phải >= 0' using errcode = '22023';
+    end if;
+    insert into public.global_stats as s (key, value) values (stat_key, delta)
+    on conflict (key) do update set value = s.value + excluded.value
+    returning s.value into result;
+    return result;
+end
+$$;
+
+revoke all on function public.increment_stat(text, bigint) from public, anon, authenticated;
+grant execute on function public.increment_stat(text, bigint) to service_role;
+
+notify pgrst, 'reload schema';

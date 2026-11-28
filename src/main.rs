@@ -15,7 +15,7 @@ mod web;
 mod websocket;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -35,6 +35,38 @@ struct App {
     moderation: Mutex<()>,
     started: Instant,
     synced: AtomicBool,
+    /// Guild count across every shard, refreshed by the sync thread. Zero until the first
+    /// refresh (and always zero with a single shard, where the local cache is complete).
+    guild_total: AtomicUsize,
+}
+
+impl App {
+    /// Guilds this bot is in, over all shards. The local cache only knows this shard's guilds,
+    /// so it is a lower bound that is used while the shared count is unavailable.
+    fn total_guilds(&self) -> usize {
+        let local = self.discord.cache.read().unwrap().guilds.len();
+        local.max(self.guild_total.load(Ordering::Relaxed))
+    }
+
+    /// Asks Discord for the application's guild count (all shards). Called from the
+    /// background thread so a slow Discord never delays the status endpoints.
+    fn refresh_guild_total(&self) -> Result<(), String> {
+        if self.config.shard_count == 1 {
+            return Ok(());
+        }
+        let application = self.discord.rest("GET", "/applications/@me", None)?;
+        let count = application["approximate_guild_count"].int();
+        if count > 0 {
+            self.guild_total.store(count as usize, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+}
+
+/// The first sync waits longer for higher shards so that N processes started together do not
+/// all read Supabase at the same moment, then every shard keeps the same period.
+fn first_sync_delay(interval: Duration, shard_id: u32, shard_count: u32) -> Duration {
+    interval + interval * shard_id / shard_count.max(1)
 }
 
 #[derive(Default)]
@@ -166,6 +198,8 @@ fn run() -> Result<(), String> {
         signal(2, shutdown);
         signal(15, shutdown);
     }
+    let sync_interval = config.sync_interval;
+    let first_sync = first_sync_delay(sync_interval, config.shard_id, config.shard_count);
     eprintln!("Đang nạp dữ liệu Supabase...");
     let store = Store::load(&config.supabase_url, &config.supabase_key)?;
     eprintln!("Đã nạp {} từ khả dụng.", store.dictionary.count());
@@ -178,6 +212,7 @@ fn run() -> Result<(), String> {
         moderation: Mutex::new(()),
         started,
         synced: AtomicBool::new(false),
+        guild_total: AtomicUsize::new(0),
     });
     let server = web::start(Arc::clone(&app))?;
     game::start_deletions(Arc::clone(&app));
@@ -188,16 +223,43 @@ fn run() -> Result<(), String> {
             flush_signal.recv_timeout(Duration::from_secs(60)),
             Err(RecvTimeoutError::Timeout)
         ) {
-            if let Err(error) = flush_app.store.lock().unwrap().flush_query() {
+            if let Err(error) = flush_app.store.lock().unwrap().flush_stats() {
                 eprintln!("Ghi thống kê định kỳ: {error}");
+            }
+        }
+    });
+    // Mirrors Supabase into RAM so changes made elsewhere (other shards, the SQL editor)
+    // are picked up. The first run is one interval after the startup load.
+    let (stop_resync, resync_signal) = channel::<()>();
+    let resync_app = Arc::clone(&app);
+    let resyncer = thread::spawn(move || {
+        let mut wait = first_sync;
+        if let Err(error) = resync_app.refresh_guild_total() {
+            eprintln!("Cập nhật tổng số máy chủ: {error}");
+        }
+        while matches!(
+            resync_signal.recv_timeout(wait),
+            Err(RecvTimeoutError::Timeout)
+        ) {
+            wait = sync_interval;
+            if let Err(error) = resync_app.refresh_guild_total() {
+                eprintln!("Cập nhật tổng số máy chủ: {error}");
+            }
+            match store::resync(&resync_app.store, &|| SHUTDOWN.load(Ordering::Relaxed)) {
+                Ok(report) if report.total() > 0 => eprintln!("Đồng bộ Supabase: {report}"),
+                Ok(_) => {}
+                Err(_) if SHUTDOWN.load(Ordering::Relaxed) => {}
+                Err(error) => eprintln!("Đồng bộ Supabase thất bại, thử lại sau: {error}"),
             }
         }
     });
     let result = gateway::run(Arc::clone(&app));
     SHUTDOWN.store(true, Ordering::Relaxed);
     drop(stop_flush);
+    drop(stop_resync);
     let _ = flusher.join();
-    if let Err(error) = app.store.lock().unwrap().flush_query() {
+    let _ = resyncer.join();
+    if let Err(error) = app.store.lock().unwrap().flush_stats() {
         eprintln!("Ghi thống kê lúc thoát: {error}");
     }
     let _ = server.join();
@@ -217,6 +279,66 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn higher_shards_start_their_first_sync_later_then_share_the_period() {
+        let interval = Duration::from_secs(600);
+        assert_eq!(first_sync_delay(interval, 0, 1), interval);
+        assert_eq!(first_sync_delay(interval, 0, 4), interval);
+        assert_eq!(first_sync_delay(interval, 1, 4), Duration::from_secs(750));
+        assert_eq!(first_sync_delay(interval, 3, 4), Duration::from_secs(1050));
+        assert!(
+            first_sync_delay(Duration::from_secs(86_400), 999, 1000) < Duration::from_secs(172_800)
+        );
+    }
+
+    #[test]
+    fn guild_total_uses_the_shared_count_only_when_sharded_and_never_drops_below_local() {
+        use crate::discord::Guild;
+        use crate::test_support::{Reply, app, database, dictionary, mock, store};
+        let (mut app, _) = mock(database(&[("words", dictionary())]), || app(store()));
+        {
+            let mut cache = app.discord.cache.write().unwrap();
+            for id in ["1", "2"] {
+                cache
+                    .guilds
+                    .insert(id.into(), Guild::from_gateway(json!({"id": id}), "bot"));
+            }
+        }
+        // One shard: the local cache is complete and Discord is not asked.
+        assert_eq!(app.refresh_guild_total(), Ok(()));
+        assert_eq!(app.total_guilds(), 2);
+
+        app.config.shard_count = 3;
+        let replies = vec![
+            Reply::json(
+                "GET",
+                "/api/v10/applications/@me",
+                200,
+                json!({"approximate_guild_count": 40}),
+            ),
+            Reply::json("GET", "/api/v10/applications/@me", 200, json!({"id": "1"})),
+            Reply::json(
+                "GET",
+                "/api/v10/applications/@me",
+                500,
+                json!({"message": "boom"}),
+            ),
+        ];
+        let (results, _) = mock(replies, || {
+            let first = app.refresh_guild_total();
+            let total = app.total_guilds();
+            // A response without the field, or a failure, keeps the last known value.
+            let second = app.refresh_guild_total();
+            let third = app.refresh_guild_total();
+            (first, total, second, third, app.total_guilds())
+        });
+        assert_eq!((results.0, results.1), (Ok(()), 40));
+        assert_eq!((results.2, results.4), (Ok(()), 40));
+        assert!(results.3.is_err());
+        app.guild_total.store(1, Ordering::Relaxed);
+        assert_eq!(app.total_guilds(), 2);
+    }
 
     #[test]
     fn leaving_blocks_new_operations_and_can_be_retried() {

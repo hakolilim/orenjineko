@@ -395,8 +395,8 @@ mod tests {
         replies.extend([
             Reply::empty("POST", "/rest/v1/game_state"),
             Reply::empty("POST", "/rest/v1/rankings"),
-            Reply::empty("POST", "/rest/v1/global_stats"),
-            Reply::empty("POST", "/rest/v1/global_stats"),
+            Reply::json("POST", "/rest/v1/rpc/increment_stat", 200, json!(2)),
+            Reply::json("POST", "/rest/v1/rpc/increment_stat", 200, json!(1)),
         ]);
         let (_, requests) = mock(replies, || {
             let mut store = store();
@@ -421,7 +421,16 @@ mod tests {
         let writes = &requests[requests.len() - 4..];
         assert_eq!(writes[0].body["words"].array().len(), 1);
         assert_eq!(writes[1].body["true_count"].int(), 1);
-        assert_eq!(writes[2].body["value"].int(), 2);
-        assert_eq!(writes[3].body["key"].str(), "round_played");
+        assert_eq!(writes[2].body["stat_key"].str(), "word_played");
+        assert_eq!(writes[2].body["delta"].int(), 2);
+        assert_eq!(writes[3].body["stat_key"].str(), "round_played");
+        assert_eq!(writes[3].body["delta"].int(), 1);
+        // An RPC must not ask for `return=minimal`: that would drop the returned total.
+        assert!(
+            writes[2]
+                .headers
+                .iter()
+                .all(|header| !header.starts_with("Prefer:"))
+        );
     }
 }

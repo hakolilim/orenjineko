@@ -26,7 +26,12 @@ const HEADER_LIMIT: u64 = 16 * 1024;
 
 pub fn start(app: Arc<App>) -> Result<JoinHandle<()>, String> {
     let listener = TcpListener::bind(("0.0.0.0", app.config.port))
-        .map_err(|error| format!("Mở cổng web: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "Mở cổng web {}: {error}. Mỗi tiến trình trên cùng máy cần một PORT riêng (mặc định 3000 + SHARD_ID).",
+                app.config.port
+            )
+        })?;
     listener
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
@@ -261,7 +266,8 @@ fn status(app: &App) -> Json {
     let uptime = app.started.elapsed();
     json!({
         "status": (if ready { "online" } else { "booting" }), "ready": ready, "bot": {"tag": tag, "avatar": icon},
-        "guilds": guilds, "uptimeMs": (uptime.as_millis()), "uptime": (format_uptime(uptime.as_secs())),
+        "shard": {"id": (app.config.shard_id), "count": (app.config.shard_count), "guilds": guilds},
+        "guilds": (if ready { app.total_guilds() } else { 0 }), "uptimeMs": (uptime.as_millis()), "uptime": (format_uptime(uptime.as_secs())),
         "stats": {
             "wordPlayed": (store.words), "roundPlayed": (store.rounds), "players": (store.players()),
             "dictionaryWords": (store.dictionary.count())
@@ -724,6 +730,10 @@ mod route_tests {
         let online = Json::parse(route(&app, "/api/status").body.as_bytes()).unwrap();
         assert_eq!(online["bot"]["tag"].str(), "Neko");
         assert_eq!(online["stats"]["dictionaryWords"].int(), 3);
+        assert_eq!(online["shard"]["id"].int(), 0);
+        assert_eq!(online["shard"]["count"].int(), 1);
+        assert_eq!(online["shard"]["guilds"].int(), 0);
+        assert_eq!(online["guilds"].int(), 0);
         assert_eq!(route(&app, "/").code, 200);
         assert_eq!(route(&app, "/privacy-policy").code, 200);
         assert_eq!(route(&app, "/terms-of-service").code, 200);

@@ -11,6 +11,8 @@ use crate::{App, SHUTDOWN, commands, game};
 
 const INTENTS: u32 = (1 << 0) | (1 << 9) | (1 << 15);
 const DEFAULT_GATEWAY: &str = "wss://gateway.discord.gg";
+/// Shards whose `shard_id % max_concurrency` match may only IDENTIFY once per this period.
+const IDENTIFY_SPACING: Duration = Duration::from_secs(5);
 
 struct Workers {
     messages: Vec<SyncSender<Json>>,
@@ -18,6 +20,16 @@ struct Workers {
     ai: Vec<SyncSender<Json>>,
     autocomplete: Vec<SyncSender<Json>>,
     threads: Vec<JoinHandle<()>>,
+    shard_count: u64,
+}
+
+/// Discord gives a guild to shard `(id >> 22) % shard_count`, so on one shard every guild
+/// has the same remainder modulo `shard_count`. Taking `% workers` of that directly would send
+/// all guilds to a single worker whenever `shard_count` is a multiple of the pool size.
+/// Dividing the remainder out first spreads them over the whole pool, and one guild still always
+/// maps to the same worker so its messages are handled in order.
+fn worker_index(guild: u64, shard_count: u64, workers: usize) -> usize {
+    ((guild >> 22) / shard_count.max(1) % workers as u64) as usize
 }
 
 impl Workers {
@@ -33,6 +45,7 @@ impl Workers {
             ai,
             autocomplete,
             threads,
+            shard_count: u64::from(app.config.shard_count),
         }
     }
 
@@ -41,7 +54,7 @@ impl Workers {
             return;
         }
         let id = data["guild_id"].str().parse::<u64>().unwrap_or_default();
-        let channel = &self.messages[(id as usize >> 22) % self.messages.len()];
+        let channel = &self.messages[worker_index(id, self.shard_count, self.messages.len())];
         if channel.try_send(data).is_err() {
             eprintln!("Hàng đợi tin nhắn Discord đã đầy");
         }
@@ -116,14 +129,85 @@ enum Disconnect {
 
 pub fn run(app: Arc<App>) -> Result<(), String> {
     let workers = Workers::new(&app);
-    let gateway_url = app
+    let result = app
         .discord
         .rest("GET", "/gateway/bot", None)
-        .map(|data| data["url"].opt_str().unwrap_or(DEFAULT_GATEWAY).to_owned());
-    let result = gateway_url.and_then(|gateway_url| connect_loop(&app, &workers, &gateway_url));
+        .and_then(|info| {
+            let (shard, count) = (app.config.shard_id, app.config.shard_count);
+            let limits = Limits::from(&info);
+            eprintln!("Shard {shard}/{count}. {}", limits.describe(count));
+            pause(identify_delay(shard, limits.max_concurrency));
+            connect_loop(&app, &workers, &limits.url)
+        });
     SHUTDOWN.store(true, Ordering::Relaxed);
     workers.join();
     result
+}
+
+/// What `/gateway/bot` says about connecting.
+struct Limits {
+    url: String,
+    /// Shard count Discord recommends for the current number of guilds; 0 if unknown.
+    recommended: u32,
+    max_concurrency: u32,
+    remaining: Option<i64>,
+}
+
+impl Limits {
+    fn from(info: &Json) -> Self {
+        let start = &info["session_start_limit"];
+        Self {
+            url: info["url"].opt_str().unwrap_or(DEFAULT_GATEWAY).to_owned(),
+            recommended: info["shards"].int().clamp(0, u32::MAX.into()) as u32,
+            max_concurrency: start["max_concurrency"].int().clamp(1, u32::MAX.into()) as u32,
+            remaining: start["remaining"].decimal().map(|value| value as i64),
+        }
+    }
+
+    fn describe(&self, shard_count: u32) -> String {
+        let mut text = format!("Discord khuyến nghị {} shard", self.recommended);
+        if let Some(remaining) = self.remaining {
+            text.push_str(&format!(", còn {remaining} lượt IDENTIFY"));
+        }
+        if self.recommended > shard_count {
+            text.push_str(&format!(
+                ". CẢNH BÁO: SHARD_COUNT={shard_count} thấp hơn khuyến nghị, Discord có thể từ chối kết nối (mã 4011)"
+            ));
+        }
+        text
+    }
+}
+
+/// Shards that share an IDENTIFY slot (`shard_id % max_concurrency`) wait for their turn,
+/// so processes started together do not trip Discord's IDENTIFY rate limit.
+fn identify_delay(shard_id: u32, max_concurrency: u32) -> Duration {
+    IDENTIFY_SPACING * (shard_id / max_concurrency.max(1))
+}
+
+/// Sleeps, but returns early when the bot is shutting down.
+fn pause(duration: Duration) {
+    let end = Instant::now() + duration;
+    while !SHUTDOWN.load(Ordering::Relaxed) {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        thread::sleep(left.min(Duration::from_millis(100)));
+    }
+}
+
+fn fatal_message(code: u16, shard_count: u32) -> String {
+    let hint = match code {
+        4004 => "Token bot không hợp lệ.".to_owned(),
+        4010 => "Discord từ chối thông tin shard. Kiểm tra SHARD_ID và SHARD_COUNT.".to_owned(),
+        4011 => format!(
+            "Discord yêu cầu thêm shard: tăng SHARD_COUNT (hiện là {shard_count}) rồi khởi động lại mọi shard."
+        ),
+        4012 => "Phiên bản Gateway không được hỗ trợ.".to_owned(),
+        4013 => "Intent gửi lên không hợp lệ.".to_owned(),
+        _ => "Kiểm tra token và Message Content Intent.".to_owned(),
+    };
+    format!("Discord Gateway từ chối phiên (mã {code}). {hint}")
 }
 
 fn connect_loop(app: &Arc<App>, workers: &Workers, gateway_url: &str) -> Result<(), String> {
@@ -144,9 +228,7 @@ fn connect_loop(app: &Arc<App>, workers: &Workers, gateway_url: &str) -> Result<
         }
         match result {
             Ok(Disconnect::Fatal(code)) => {
-                return Err(format!(
-                    "Discord Gateway từ chối phiên (mã {code}). Kiểm tra token và Message Content Intent."
-                ));
+                return Err(fatal_message(code, app.config.shard_count));
             }
             Ok(Disconnect::Identify) => session = Session::default(),
             Ok(Disconnect::Retry) => {}
@@ -155,12 +237,7 @@ fn connect_loop(app: &Arc<App>, workers: &Workers, gateway_url: &str) -> Result<
         if started.elapsed() > Duration::from_secs(60) {
             backoff = 1;
         }
-        for _ in 0..backoff * 10 {
-            if SHUTDOWN.load(Ordering::Relaxed) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
+        pause(Duration::from_secs(backoff));
         backoff = (backoff * 2).min(30);
     }
     Ok(())
@@ -230,14 +307,7 @@ fn connection(
                         let identify = if session.resumable() {
                             json!({"op": 6, "d": {"token": token, "session_id": (&session.id), "seq": (session.sequence)}})
                         } else {
-                            json!({"op": 2, "d": {
-                                "token": token, "intents": INTENTS, "properties": {
-                                    "os": (std::env::consts::OS), "browser": "orenjineko", "device": "orenjineko"
-                                }, "presence": {
-                                    "status": "idle", "since": null, "afk": false,
-                                    "activities": [{"name": "nối từ | /rank", "type": 0}]
-                                }
-                            }})
+                            identify(token, app.config.shard_id, app.config.shard_count)
                         };
                         ws.text(&identify.encode())?;
                     }
@@ -253,6 +323,17 @@ fn connection(
         }
     }
     Ok(Disconnect::Retry)
+}
+
+fn identify(token: &str, shard_id: u32, shard_count: u32) -> Json {
+    json!({"op": 2, "d": {
+        "token": token, "intents": INTENTS, "shard": [shard_id, shard_count], "properties": {
+            "os": (std::env::consts::OS), "browser": "orenjineko", "device": "orenjineko"
+        }, "presence": {
+            "status": "idle", "since": null, "afk": false,
+            "activities": [{"name": "nối từ | /rank", "type": 0}]
+        }
+    }})
 }
 
 fn heartbeat(ws: &mut WebSocket, session: &Session) -> Result<(), String> {
@@ -277,8 +358,16 @@ fn dispatch(app: &Arc<App>, workers: &Workers, session: &mut Session, event: &st
             }
             cache.ready = true;
             drop(cache);
-            eprintln!("Đã kết nối Discord với {}", data["user"]["username"].str());
-            if !app.synced.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "Đã kết nối Discord với {} (shard {}/{}, {} máy chủ)",
+                data["user"]["username"].str(),
+                app.config.shard_id,
+                app.config.shard_count,
+                data["guilds"].array().len()
+            );
+            // The command list is global, so one shard registers it. Every shard doing a
+            // bulk overwrite at once only burns Discord's command-update rate limit.
+            if app.config.shard_id == 0 && !app.synced.swap(true, Ordering::Relaxed) {
                 let app = Arc::clone(app);
                 thread::spawn(move || {
                     if let Err(error) = app.discord.rest(
@@ -391,4 +480,104 @@ fn dispatch(app: &Arc<App>, workers: &Workers, session: &mut Session, event: &st
 
 fn cache_user(data: &Json) -> &str {
     data["user"]["id"].str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identify_names_the_shard_this_process_serves() {
+        let payload = identify("secret", 2, 4);
+        assert_eq!(payload["op"].int(), 2);
+        let shard = payload["d"]["shard"].array();
+        assert_eq!((shard[0].int(), shard[1].int()), (2, 4));
+        assert_eq!(payload["d"]["token"].str(), "secret");
+        assert_eq!(payload["d"]["intents"].int(), i64::from(INTENTS));
+        let encoded = payload.encode();
+        assert!(encoded.contains(r#""shard":[2,4]"#), "{encoded}");
+    }
+
+    #[test]
+    fn identify_waits_only_for_shards_that_share_a_slot() {
+        let secs = |shard, concurrency| identify_delay(shard, concurrency).as_secs();
+        assert_eq!((secs(0, 1), secs(1, 1), secs(3, 1)), (0, 5, 15));
+        // With max_concurrency 16, shards 0-15 identify together, 16-31 five seconds later.
+        assert_eq!(
+            (secs(0, 16), secs(15, 16), secs(16, 16), secs(33, 16)),
+            (0, 0, 5, 10)
+        );
+        assert_eq!(secs(7, 0), 35, "a bogus 0 is treated as 1");
+    }
+
+    #[test]
+    fn gateway_limits_are_read_with_safe_defaults() {
+        let info = json!({
+            "url": "wss://gateway.example", "shards": 6,
+            "session_start_limit": {"remaining": 990, "max_concurrency": 4}
+        });
+        let limits = Limits::from(&info);
+        assert_eq!(limits.url, "wss://gateway.example");
+        assert_eq!(
+            (limits.recommended, limits.max_concurrency, limits.remaining),
+            (6, 4, Some(990))
+        );
+        let described = limits.describe(2);
+        assert!(
+            described.contains("khuyến nghị 6")
+                && described.contains("còn 990")
+                && described.contains("CẢNH BÁO")
+        );
+        assert!(!limits.describe(6).contains("CẢNH BÁO"));
+
+        let bare = Limits::from(&json!({}));
+        assert_eq!(bare.url, DEFAULT_GATEWAY);
+        assert_eq!(
+            (bare.recommended, bare.max_concurrency, bare.remaining),
+            (0, 1, None)
+        );
+        assert!(!bare.describe(1).contains("CẢNH BÁO"));
+    }
+
+    #[test]
+    fn fatal_close_codes_explain_what_to_fix() {
+        assert!(
+            fatal_message(4010, 2).contains("SHARD_ID")
+                && fatal_message(4010, 2).contains("SHARD_COUNT")
+        );
+        let more = fatal_message(4011, 2);
+        assert!(
+            more.contains("tăng SHARD_COUNT") && more.contains("(hiện là 2)"),
+            "{more}"
+        );
+        assert!(fatal_message(4004, 1).contains("Token"));
+        assert!(fatal_message(4014, 1).contains("Message Content Intent"));
+    }
+
+    #[test]
+    fn a_shards_guilds_spread_over_every_message_worker_in_a_stable_order() {
+        let snowflake = |timestamp: u64| timestamp << 22 | 0x2a;
+        for (count, shard) in [(1u64, 0u64), (2, 1), (8, 3), (16, 5), (4, 0)] {
+            let mut used = [0usize; 8];
+            for round in 0..800u64 {
+                let guild = snowflake(round * count + shard);
+                assert_eq!((guild >> 22) % count, shard);
+                let worker = worker_index(guild, count, 8);
+                assert_eq!(
+                    worker,
+                    worker_index(guild, count, 8),
+                    "same guild, same worker"
+                );
+                used[worker] += 1;
+            }
+            assert!(
+                used.iter().all(|uses| *uses == 100),
+                "{count}/{shard}: {used:?}"
+            );
+        }
+        // One shard keeps the previous placement.
+        assert_eq!(worker_index(snowflake(21), 1, 8), 21 % 8);
+        // A degenerate count must not divide by zero.
+        assert_eq!(worker_index(snowflake(21), 0, 8), 21 % 8);
+    }
 }

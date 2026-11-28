@@ -271,7 +271,7 @@ fn configure(app: &App, event: &mut Interaction, set: bool) -> Result<(), String
 }
 
 fn stats(app: &App) -> Json {
-    let guilds = app.discord.cache.read().unwrap().guilds.len();
+    let guilds = app.total_guilds();
     let store = app.store.lock().unwrap();
     embed(vec![
         field(
@@ -881,6 +881,17 @@ fn guild_choices(app: &App) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Names are only known for the guilds this shard serves; an ID works for any guild.
+fn other_shards_note(app: &App) -> String {
+    if app.config.shard_count == 1 {
+        return String::new();
+    }
+    format!(
+        " Gợi ý và tìm theo tên chỉ gồm máy chủ thuộc shard {}/{}; máy chủ ở shard khác hãy nhập ID.",
+        app.config.shard_id, app.config.shard_count
+    )
+}
+
 fn autocomplete(app: &App, event: &mut Interaction) -> Result<(), String> {
     let mut choices = Vec::new();
     if event.data["data"]["name"].str() == "leave"
@@ -938,7 +949,7 @@ fn leave(app: &App, event: &mut Interaction) -> Result<(), String> {
                     .collect::<Vec<_>>();
                 match matches.as_slice() {
                     [(id, _)] => id.clone(),
-                    [] => return event.text("Không tìm thấy máy chủ theo tên này. Hãy chọn từ danh sách gợi ý hoặc nhập ID Discord gồm 17–20 chữ số.", true),
+                    [] => return event.text(format!("Không tìm thấy máy chủ theo tên này. Hãy chọn từ danh sách gợi ý hoặc nhập ID Discord gồm 17–20 chữ số.{}", other_shards_note(app)), true),
                     _ => return event.text("Có nhiều máy chủ trùng tên. Hãy chọn đúng máy chủ từ danh sách gợi ý có kèm ID.", true),
                 }
             }

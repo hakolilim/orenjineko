@@ -1,6 +1,6 @@
 # OrenjiNeko
 
-Bot Discord tiếng Việt với trò chơi nối từ, đếm số và trò chuyện cùng AI. Dữ liệu trò chơi được lưu trên **Supabase (Postgres)**, có cache RAM để xử lý lượt chơi nhanh và khôi phục trạng thái khi khởi động lại.
+Bot Discord tiếng Việt với trò chơi nối từ, đếm số và trò chuyện cùng AI. Dữ liệu trò chơi được lưu trên **Supabase (Postgres)**, có cache RAM để xử lý lượt chơi nhanh và khôi phục trạng thái khi khởi động lại. Cache được đồng bộ lại từ Supabase định kỳ (mặc định 10 phút) nên luôn phản ánh dữ liệu trong database.
 
 [Mã nguồn](https://github.com/hakolilim/orenjineko) · [Support Discord Server](https://discord.gg/NC7Ks2c5wE) · [Privacy Policy](PRIVACY_POLICY.md) · [Terms of Service](TERMS_OF_SERVICE.md)
 
@@ -56,7 +56,7 @@ test -f .env || install -m 600 .env.example .env
 chmod 600 .env
 ```
 
-Điền `BOT_TOKEN`, `SUPABASE_URL` và `SUPABASE_KEY` theo mục [Biến môi trường](#biến-môi-trường). Với project Supabase mới, chạy `supabase/schema.sql` trong SQL Editor. Dừng instance bot cũ trước khi khởi động bản release dùng cùng database.
+Điền `BOT_TOKEN`, `SUPABASE_URL` và `SUPABASE_KEY` theo mục [Biến môi trường](#biến-môi-trường). Với project Supabase mới, chạy `supabase/schema.sql` trong SQL Editor. Với database đã có từ trước, chạy khối hàm `increment_stat` ở cuối `supabase/schema.sql` **trước khi** khởi động bản release này (bot dùng hàm đó để cộng dồn bộ đếm `global_stats`). Dừng instance bot cũ trước khi khởi động bản release dùng cùng database.
 
 Khởi động lần đầu bằng PM2. Thư mục làm việc trỏ đến nơi chứa `.env`.
 
@@ -86,7 +86,7 @@ cp .env.example .env
 cargo build --release --locked --offline
 ```
 
-Điền `BOT_TOKEN`, `SUPABASE_URL` và `SUPABASE_KEY` vào `.env`. Nếu đã triển khai Phobophake, dùng bộ biến môi trường và cơ sở dữ liệu hiện tại. Bản Rust đọc cùng các bảng, khoá và kiểu dữ liệu. Với cơ sở dữ liệu mới, mở Supabase SQL Editor và chạy [schema.sql](supabase/schema.sql). Schema có ghi chú cho các bản Supabase cũ còn dùng khoá chính `guild_id` trên `guild_config`.
+Điền `BOT_TOKEN`, `SUPABASE_URL` và `SUPABASE_KEY` vào `.env`. Nếu đã triển khai OrenjiNeko, dùng bộ biến môi trường và cơ sở dữ liệu hiện tại. Bản Rust đọc cùng các bảng, khoá và kiểu dữ liệu. Với cơ sở dữ liệu mới, mở Supabase SQL Editor và chạy [schema.sql](supabase/schema.sql). Schema có ghi chú cho các bản Supabase cũ còn dùng khoá chính `guild_id` trên `guild_config`. Với database đã có từ trước, chạy khối hàm `increment_stat` ở cuối schema trước khi chạy bản mới; khối này chạy độc lập được. Nếu chưa chạy, bot vẫn chơi bình thường: bộ đếm được giữ trong RAM và ghi bù khi hàm có mặt (log báo `PGRST202`).
 
 ```bash
 ./target/release/orenjineko
@@ -108,7 +108,10 @@ Tham khảo [`.env.example`](.env.example). Không cần cấu hình AI để s�
 | `REPORT_CHANNEL` | ID kênh duyệt từ và công cụ vận hành; tuỳ chọn. |
 | `CORRECT_EMOJI` | Emoji phản hồi lượt đúng; mặc định `✅`. |
 | `WRONG_EMOJI` | Emoji phản hồi lượt sai; mặc định `❌`. |
-| `PORT` | Cổng HTTP; mặc định `3000`, lắng nghe trên `0.0.0.0`. |
+| `PORT` | Cổng HTTP, lắng nghe trên `0.0.0.0`; mặc định `3000 + SHARD_ID` (tức `3000` khi chỉ có một shard). |
+| `SHARD_ID` | Số thứ tự shard của tiến trình này, từ `0` đến `SHARD_COUNT - 1`; mặc định `0`. |
+| `SHARD_COUNT` | Tổng số shard; mặc định `1`. Giá trị sai (không phải số, `SHARD_ID >= SHARD_COUNT`) làm bot dừng ngay khi khởi động thay vì đoán một giá trị mặc định. |
+| `SYNC_INTERVAL_SECS` | Chu kỳ đồng bộ lại cache RAM từ Supabase, tính bằng giây; mặc định `600`, giá trị hợp lệ `1`–`86400` (giá trị khác dùng mặc định). |
 | `AI_BASE_URL` | Base URL API tương thích OpenAI; mặc định `https://api.openai.com/v1`. |
 | `AI_API_KEY` | Khoá API của nhà cung cấp; cần khi dùng OpenAI, có thể bỏ trống nếu API local không yêu cầu xác thực. |
 | `AI_MODEL` | Tên model; mặc định `gpt-4o-mini`. |
@@ -194,7 +197,7 @@ Khi câu trả lời có LaTeX, bot tự gửi thêm **ảnh preview công thứ
 
 ## Trang web và API
 
-Web server dùng `PORT` (mặc định `3000`). Khi chạy tại máy cá nhân, mở `http://localhost:3000`; khi triển khai, dùng tên miền của dịch vụ đang chạy bot.
+Web server dùng `PORT` (mặc định `3000 + SHARD_ID`). Khi chạy tại máy cá nhân, mở `http://localhost:3000`; khi triển khai, dùng tên miền của dịch vụ đang chạy bot.
 
 | Đường dẫn | Nội dung |
 | --- | --- |
@@ -213,7 +216,40 @@ Bản build nhúng hai tài liệu [`PRIVACY_POLICY.md`](PRIVACY_POLICY.md) và 
 
 Dùng [bản phát hành Linux cho VPS Debian 12](#deploy-từ-github-release) hoặc tự build trên môi trường có cùng ABI với máy chạy. Dùng `/health` để kiểm tra HTTP và `/api/status` để kiểm tra trạng thái kết nối Discord.
 
-Chỉ chạy **một instance hoạt động tại một thời điểm**. Mỗi instance giữ cache RAM riêng và không nhận cập nhật trực tiếp từ instance khác. Khi chuyển VPS, dừng instance cũ trước rồi khởi động instance mới; bot mới nạp lại state từ cùng Supabase. Việc sao lưu và khôi phục dữ liệu thực hiện trên cơ sở dữ liệu; không dựa vào thư mục `data/` cũ.
+Mỗi instance giữ cache RAM riêng và kéo lại toàn bộ dữ liệu từ Supabase mỗi `SYNC_INTERVAL_SECS` giây (mặc định 10 phút). Thay đổi thực hiện ngoài bot, ví dụ thêm hoặc xoá hàng `premium_guilds` trong SQL Editor, có hiệu lực trong khoảng đó mà không cần khởi động lại. Lần đồng bộ lấy Supabase làm chuẩn: hàng không còn trong database bị xoá khỏi RAM, còn dữ liệu bot vừa ghi trong lúc đang đọc được giữ nguyên. Nếu một lần đồng bộ lỗi (mạng, Supabase trả `500`, từ điển rỗng) thì bỏ cả đợt, giữ RAM nguyên vẹn và thử lại ở chu kỳ sau.
+
+### Sharding
+
+Bot chạy được nhiều tiến trình, mỗi tiến trình phụ trách một shard Discord và cùng dùng một Supabase. Discord chia máy chủ theo `(guild_id >> 22) % SHARD_COUNT`; mỗi tiến trình chỉ nhận tin nhắn và lệnh của các máy chủ thuộc shard của mình. Với một máy chủ nhỏ (dưới 2500 máy chủ) không cần bật sharding; để mặc định `SHARD_COUNT=1`.
+
+Quy tắc bắt buộc:
+
+- Mỗi `SHARD_ID` chỉ chạy **đúng một tiến trình**. `rankings` và `game_state` được cập nhật theo kiểu đọc-sửa-ghi trên từng máy chủ, nên mỗi máy chủ phải có đúng một chủ. Hai tiến trình cùng `SHARD_ID` cùng nhận mọi sự kiện, trả lời hai lần và ghi đè dữ liệu của nhau. Khi chuyển VPS hoặc khởi động lại, dừng tiến trình cũ trước (PM2 làm việc này với `restart`).
+- Mọi tiến trình dùng chung một `SHARD_COUNT`. Khi đổi `SHARD_COUNT`, **dừng tất cả shard rồi mới khởi động lại**; nếu chạy lẫn hai giá trị, một máy chủ có thể thuộc hai tiến trình cùng lúc.
+- Số shard tối thiểu do Discord yêu cầu. Bot ghi log số shard Discord khuyến nghị lúc khởi động và cảnh báo nếu `SHARD_COUNT` thấp hơn; khi đó Discord có thể đóng kết nối với mã `4011` (bot báo cần tăng `SHARD_COUNT`).
+- Mỗi tiến trình cần `PORT` riêng nếu cùng máy. Để `PORT` trống để dùng `3000 + SHARD_ID`.
+
+Ví dụ chạy 3 shard bằng PM2, cùng một `.env` (để trống `PORT`, `SHARD_ID`, `SHARD_COUNT` trong file):
+
+```bash
+for id in 0 1 2; do
+  SHARD_ID=$id SHARD_COUNT=3 pm2 start "$PWD/orenjineko" --name "orenjineko-$id" \
+    --interpreter none --cwd "$PWD" --kill-timeout 60000
+done
+pm2 save
+curl -fsS http://127.0.0.1:3001/api/status   # shard 1, có trường "shard"
+```
+
+Cách các tiến trình phối hợp:
+
+- **Dữ liệu**: mỗi tiến trình nạp và đồng bộ định kỳ **toàn bộ** Supabase, không chỉ phần của shard mình. Nhờ vậy `/stats`, `/broadcast`, từ điển và Premium thấy cùng một dữ liệu ở mọi shard; dữ liệu do shard khác ghi có hiệu lực trong khoảng `SYNC_INTERVAL_SECS`. Lần đồng bộ đầu tiên của shard `n` được dời thêm `n / SHARD_COUNT` chu kỳ để các shard không đọc Supabase cùng lúc.
+- **Bộ đếm** `query`, `word_played`, `round_played` cộng dồn nguyên tử bằng `increment_stat`, nên cộng tổng đúng dù nhiều shard cùng ghi.
+- **Kết nối Discord**: shard `n` đợi `(n / max_concurrency) × 5` giây trước lần IDENTIFY đầu tiên để không vượt giới hạn IDENTIFY của Discord, nên khởi động lại một shard đơn lẻ cũng có độ trễ này. Chỉ shard `0` đăng ký slash command toàn cục. Tin nhắn trong máy chủ được chia đều cho các luồng xử lý bên trong mỗi shard.
+- **Tổng số máy chủ** ở `/stats` và `/api/status` lấy từ Discord (`approximate_guild_count`, làm mới mỗi chu kỳ đồng bộ). Trước lần làm mới đầu, hoặc nếu Discord không trả về, số này chỉ gồm máy chủ của shard hiện tại. `/api/status` có thêm `shard` (`id`, `count`, số máy chủ của shard này).
+- **Lệnh liên shard**: `/broadcast` gửi qua REST nên tới được kênh ở mọi shard. `/leave guild:<ID>` cũng chạy được với máy chủ thuộc shard khác (autocomplete và tìm theo tên chỉ gồm máy chủ của shard hiện tại, hãy nhập ID); dữ liệu trong RAM của shard kia được dọn ở lần đồng bộ kế tiếp.
+- **Tin nhắn riêng (DM)** do Discord chuyển cho shard `0`.
+
+Khi chạy một tiến trình duy nhất, quy tắc trên vẫn đúng: chỉ một instance hoạt động tại một thời điểm. Khi chuyển VPS, dừng instance cũ trước rồi khởi động instance mới; bot mới nạp lại state từ cùng Supabase. Việc sao lưu và khôi phục dữ liệu thực hiện trên cơ sở dữ liệu; không dựa vào thư mục `data/` cũ.
 
 ## Cấu trúc dự án và dữ liệu
 
@@ -224,11 +260,11 @@ Chỉ chạy **một instance hoạt động tại một thời điểm**. Mỗi
 | `src/discord.rs` | Discord REST, phản hồi tương tác và tính quyền trong kênh. |
 | `src/commands.rs` | 13 slash command, autocomplete và nút duyệt từ. |
 | `src/game.rs` | Lệnh prefix và xử lý lượt nối từ/đếm số. |
-| `src/store.rs` | Supabase PostgREST, cache trạng thái, thống kê và từ điển. |
+| `src/store.rs` | Supabase PostgREST, cache trạng thái, đồng bộ định kỳ từ Supabase (`resync`), thống kê và từ điển. |
 | `src/ai.rs` | Ngữ cảnh AI, ảnh, SSE và hiển thị câu trả lời. |
 | `src/latex.rs` | Phân tích và dựng preview PNG công thức. |
 | `src/web.rs` | Web server HTTP, API trạng thái, tra từ và hai trang chính sách. |
-| `supabase/schema.sql` | Schema tương thích Phobophake và ghi chú migration. |
+| `supabase/schema.sql` | Schema tương thích OrenjiNeko và ghi chú migration. |
 
 | Bảng Supabase | Dữ liệu |
 | --- | --- |
@@ -241,7 +277,7 @@ Chỉ chạy **một instance hoạt động tại một thời điểm**. Mỗi
 | `global_stats` | Các bộ đếm `query`, `word_played`, `round_played`. |
 | `premium_guilds` | ID máy chủ Premium. |
 
-Bot nạp dữ liệu vào RAM khi khởi động và lưu các lượt chơi qua Supabase. Bộ đếm `query` gom trong RAM, ghi mỗi 60 giây và khi nhận `SIGINT` hoặc `SIGTERM`. Khi có lỗi ghi dữ liệu, cache chỉ cập nhật các hàng đã được Supabase xác nhận. Từ điển trò chơi lấy từ bảng `words` sau khi trừ các mục trong `report_words`.
+Bot nạp dữ liệu vào RAM khi khởi động và lưu các lượt chơi qua Supabase. Ba bộ đếm `query`, `word_played`, `round_played` được cộng dồn bằng hàm SQL nguyên tử `increment_stat` (RPC), nên nhiều tiến trình không ghi đè số của nhau; `query` gom trong RAM và ghi mỗi 60 giây hoặc khi nhận `SIGINT`/`SIGTERM`, hai bộ đếm còn lại ghi ngay sau mỗi lượt. Ghi bộ đếm lỗi thì phần chưa ghi được giữ lại và gửi bù ở lần sau; nếu yêu cầu hết thời gian chờ sau khi server đã ghi xong thì lần gửi lại có thể đếm đôi. Khi có lỗi ghi dữ liệu khác, cache chỉ cập nhật các hàng đã được Supabase xác nhận. Cứ mỗi `SYNC_INTERVAL_SECS` giây bot đọc lại toàn bộ 8 bảng (phân trang theo khoá, không dùng offset để không bỏ sót hàng khi dữ liệu đang thay đổi) rồi đối chiếu với RAM. Từ điển trò chơi lấy từ bảng `words` sau khi trừ các mục trong `report_words`.
 
 ## Kiểm tra mã nguồn
 

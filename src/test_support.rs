@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::{Duration, Instant};
 
 use crate::App;
@@ -101,38 +101,47 @@ pub fn try_request(
     })
 }
 
+/// Every table in the order `Snapshot::fetch` reads it, with its primary-key columns.
+pub const TABLES: [(&str, &[&str]); 8] = [
+    ("words", &["word"]),
+    ("report_words", &["word"]),
+    ("guild_config", &["channel_id"]),
+    ("counting_channels", &["channel_id"]),
+    ("game_state", &["channel_id"]),
+    ("rankings", &["guild_id", "user_id"]),
+    ("global_stats", &["key"]),
+    ("premium_guilds", &["guild_id"]),
+];
+
+/// Request path of one keyset page of `table`; an empty `cursor` is the first page.
+pub fn page(table: &str, cursor: &str) -> String {
+    let keys = TABLES.iter().find(|(name, _)| *name == table).unwrap().1;
+    format!(
+        "/rest/v1/{table}?select=*&order={}&limit=1000{cursor}",
+        keys.join(",")
+    )
+}
+
+/// Replies for one complete read of the given tables, as `Snapshot::fetch` requests them.
 pub fn database(fixtures: &[(&str, Vec<Json>)]) -> Vec<Reply> {
     let mut replies = Vec::new();
-    for (table, order) in [
-        ("words", "word"),
-        ("report_words", "word"),
-        ("guild_config", "channel_id"),
-        ("counting_channels", "channel_id"),
-        ("game_state", "channel_id"),
-        ("rankings", "guild_id,user_id"),
-        ("global_stats", "key"),
-        ("premium_guilds", "guild_id"),
-    ] {
-        let path = format!("/rest/v1/{table}?select=*&order={order}&limit=1000&offset=");
+    for (table, keys) in TABLES {
         let records = fixtures
             .iter()
             .find(|(name, _)| *name == table)
             .map(|(_, rows)| rows.as_slice())
             .unwrap_or_default();
-        if !records.is_empty() {
+        let mut cursor = String::new();
+        for chunk in records.chunks(1000) {
             replies.push(Reply::json(
                 "GET",
-                format!("{path}0"),
+                page(table, &cursor),
                 200,
-                Json::Array(records.to_vec()),
+                Json::Array(chunk.to_vec()),
             ));
+            cursor = crate::store::after(keys, chunk.last().unwrap());
         }
-        replies.push(Reply::json(
-            "GET",
-            format!("{path}{}", records.len()),
-            200,
-            json!([]),
-        ));
+        replies.push(Reply::json("GET", page(table, &cursor), 200, json!([])));
     }
     replies
 }
@@ -158,6 +167,9 @@ pub fn app(store: Store) -> App {
             correct_emoji: "✅".into(),
             wrong_emoji: "❌".into(),
             port: 3000,
+            shard_id: 0,
+            shard_count: 1,
+            sync_interval: Duration::from_secs(600),
             ai: AiConfig {
                 enabled: false,
                 base: "http://localhost".into(),
@@ -173,5 +185,6 @@ pub fn app(store: Store) -> App {
         moderation: Mutex::new(()),
         started: Instant::now(),
         synced: AtomicBool::new(false),
+        guild_total: AtomicUsize::new(0),
     }
 }
