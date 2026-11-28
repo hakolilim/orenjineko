@@ -355,28 +355,25 @@ fn ranking(app: &App, guild_id: &str) -> Json {
             false,
         )]
     } else {
-        let mut names = Vec::new();
-        let mut wins = Vec::new();
-        let mut correct = Vec::new();
-        for (index, (_, player)) in rows.into_iter().take(10).enumerate() {
-            names.push(format!(
-                "\x60{}\x60 {}",
-                index + 1,
-                clip(player.name.as_deref().unwrap_or("Người chơi"), 80)
-            ));
-            wins.push(format!("\x60{}\x60", player.wins));
-            correct.push(format!(
-                "\x60{}/{} ({:.2}%)\x60",
-                player.correct,
-                player.total,
-                player.accuracy() * 100.0
-            ));
-        }
-        vec![
-            field("Top 10", names.join("\n"), true),
-            field("Win", wins.join("\n"), true),
-            field("Từ đúng", correct.join("\n"), true),
-        ]
+        rows.into_iter()
+            .take(10)
+            .enumerate()
+            .map(|(index, (_, player))| {
+                let name = clip(player.name.as_deref().unwrap_or("Người chơi"), 80)
+                    .replace(['\n', '\r'], " ");
+                field(
+                    &format!("#{} · {}", index + 1, name),
+                    format!(
+                        "Win: **{}** · Từ đúng: **{}/{} ({:.2}%)**",
+                        player.wins,
+                        player.correct,
+                        player.total,
+                        player.accuracy() * 100.0,
+                    ),
+                    false,
+                )
+            })
+            .collect()
     };
     let mut result = embed(fields);
     result["author"] = author;
@@ -1011,6 +1008,8 @@ fn leave(app: &App, event: &mut Interaction) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
@@ -1026,6 +1025,71 @@ mod tests {
         assert!(leave["options"][0]["autocomplete"].bool());
         assert_eq!(normalize_guild("  Đắk Lắk  "), "dak lak");
         assert_eq!(normalize_guild("Đa\u{306}\u{301}k"), "dak");
+    }
+
+    #[test]
+    fn ranking_keeps_player_stats_together_in_rank_order() {
+        let (app, _) = crate::test_support::mock(
+            crate::test_support::database(&[("words", crate::test_support::dictionary())]),
+            || crate::test_support::app(crate::test_support::store()),
+        );
+        {
+            let mut store = app.store.lock().unwrap();
+            store.ranks.insert(
+                "guild".into(),
+                HashMap::from([
+                    (
+                        "first".into(),
+                        crate::store::Player {
+                            name: Some("Tên dài hơn".into()),
+                            wins: 4,
+                            total: 20,
+                            correct: 15,
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        "second".into(),
+                        crate::store::Player {
+                            name: Some("An".into()),
+                            wins: 2,
+                            total: 4,
+                            correct: 3,
+                            ..Default::default()
+                        },
+                    ),
+                ]),
+            );
+        }
+        let result = ranking(&app, "guild");
+        let fields = result["fields"].array();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0]["name"].str(), "#1 · Tên dài hơn");
+        assert_eq!(
+            fields[0]["value"].str(),
+            "Win: **4** · Từ đúng: **15/20 (75.00%)**"
+        );
+        assert_eq!(fields[1]["name"].str(), "#2 · An");
+        assert_eq!(
+            fields[1]["value"].str(),
+            "Win: **2** · Từ đúng: **3/4 (75.00%)**"
+        );
+        assert!(fields.iter().all(|field| !field["inline"].bool()));
+        assert!(result["description"].is_null());
+    }
+
+    #[test]
+    fn ranking_shows_empty_state_without_a_table() {
+        let (app, _) = crate::test_support::mock(
+            crate::test_support::database(&[("words", crate::test_support::dictionary())]),
+            || crate::test_support::app(crate::test_support::store()),
+        );
+        let result = ranking(&app, "guild");
+        assert_eq!(
+            result["fields"][0]["value"].str(),
+            "Chưa có ai chơi nối từ ở server này."
+        );
+        assert!(!result["fields"][0]["inline"].bool());
     }
 }
 
